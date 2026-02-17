@@ -2,13 +2,30 @@ import json
 import time
 import urllib.request
 import urllib.parse
+import http.server
+import threading
+import os
 
 # --- КОНФИГУРАЦИЯ ---
 TOKEN = "8346418130:AAF7u1diMBBTzDdfaoA9nBua4xJNfuSPY5A"
 GROUP_ID = -1003844600340
 API_URL = f"https://api.telegram.org/bot{TOKEN}/"
 
-# Состояния и данные
+# --- ВЕБ-СЕРВЕР ДЛЯ RENDER (Health Check) ---
+def run_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    server_address = ('', port)
+    httpd = http.server.HTTPServer(server_address, http.server.SimpleHTTPRequestHandler)
+    print(f"Health check server started on port {port}")
+    httpd.serve_forever()
+
+# --- ЛОГИКА БОТА ---
+STATES = [
+    "LINK_NAME", "DESC", "ICON", "TITLE", "CATEGORY", "PRICE", "VERSION",
+    "L1", "L2", "L3", "L4", "NOTE", "COMMENTS", "BG", "CHANGELOG",
+    "GAME_FILE", "GAME_ICON", "SCREENSHOTS", "EXTRA_FILES", "EXTRA_NAMES", "CONFIRM"
+]
+
 user_states = {}
 user_data = {}
 
@@ -17,102 +34,109 @@ def bot_api(method, data=None):
     try:
         req_data = json.dumps(data).encode('utf-8') if data else None
         req = urllib.request.Request(url, data=req_data, headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:
             return json.loads(response.read().decode())
     except Exception as e:
-        print(f"Ошибка API ({method}): {e}")
+        print(f"Ошибка API {method}: {e}")
         return None
 
 def set_commands():
-    """Установка списка команд для отображения через '/'"""
-    commands = {
-        "commands": [
-            {"command": "start", "description": "Начать заполнение заявки"},
-            {"command": "cancel", "description": "Отменить текущую заявку"},
-            {"command": "help", "description": "Инструкция"}
-        ]
-    }
-    bot_api("setMyCommands", commands)
+    bot_api("setMyCommands", {"commands": [
+        {"command": "start", "description": "Начать заполнение"},
+        {"command": "cancel", "description": "Отменить"}
+    ]})
 
-def send_msg(chat_id, text, reply_markup=None):
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    return bot_api("sendMessage", payload)
+def send_msg(chat_id, text):
+    return bot_api("sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
 
 def handle_update(update):
     if "message" not in update: return
     msg = update["message"]
     chat_id = msg["chat"]["id"]
-    user = msg["from"]
     text = msg.get("text", "")
+    
+    file_id = None
+    if "document" in msg: file_id = msg["document"]["file_id"]
+    elif "photo" in msg: file_id = msg["photo"][-1]["file_id"]
 
-    # Команда отмены
     if text == "/cancel":
-        user_states[chat_id] = "START"
-        send_msg(chat_id, "❌ Заполнение отменено. Напишите /start для новой попытки.")
+        user_states[chat_id] = None
+        send_msg(chat_id, "❌ Отменено. Напишите /start для новой заявки.")
         return
 
-    # Команда старт / Приветствие
-    if text == "/start":
-        user_states[chat_id] = "STEP_TITLE"
-        user_data[chat_id] = {}
-        welcome = (
-            f"👋 Привет, <b>{user.get('first_name', 'пользователь')}</b>!\n\n"
-            "Я бот модерации <b>Zoro Store</b>. Давайте оформим вашу игру.\n\n"
-            "Шаг 1: Введите <b>Заголовок*</b> игры (обязательно):"
-        )
-        send_msg(chat_id, welcome)
+    if text == "/start" or chat_id not in user_states or user_states[chat_id] is None:
+        user_states[chat_id] = STATES[0]
+        user_data[chat_id] = {"screenshots": [], "extra_files": []}
+        send_msg(chat_id, "🚀 <b>Zoro Store</b>\nШаг 1: Введите <b>Название для ссылки</b>:")
         return
 
-    state = user_states.get(chat_id, "START")
-
-    # --- ЦЕПОЧКА ОПРОСА ---
-    if state == "STEP_TITLE":
-        user_data[chat_id]['title'] = text
-        user_states[chat_id] = "STEP_DESC"
-        send_msg(chat_id, "Шаг 2: Введите <b>Описание</b> игры:")
-
-    elif state == "STEP_DESC":
-        user_data[chat_id]['desc'] = text
-        user_states[chat_id] = "STEP_PRICE"
-        send_msg(chat_id, "Шаг 3: Укажите <b>Цену</b> (или напишите 'Бесплатно'):")
-
-    elif state == "STEP_PRICE":
-        user_data[chat_id]['price'] = text
-        user_states[chat_id] = "STEP_LINKS"
-        send_msg(chat_id, "Шаг 4: Введите <b>Ссылки</b> (название = ссылка). Можно несколько штук.")
-
-    elif state == "STEP_LINKS":
-        user_data[chat_id]['links'] = text
-        user_states[chat_id] = "FINISH_CONFIRM"
-        send_msg(chat_id, "✅ Все данные собраны! Отправить на модерацию?\nНапишите <b>ДА</b> для подтверждения.")
-
-    elif state == "FINISH_CONFIRM":
-        if text.upper() == "ДА":
-            d = user_data[chat_id]
-            report = (
-                "<b>🆕 НОВАЯ ЗАЯВКА НА МОДЕРАЦИЮ</b>\n"
-                "----------------------------------\n"
-                f"👤 <b>Отправитель:</b> @{user.get('username', 'н/д')}\n"
-                f"🎮 <b>Игра:</b> {d['title']}\n"
-                f"📝 <b>Описание:</b> {d['desc']}\n"
-                f"💰 <b>Цена:</b> {d['price']}\n"
-                f"🔗 <b>Ссылки:</b>\n{d['links']}\n"
-                "----------------------------------"
-            )
-            # Отправка в твою группу
-            send_msg(GROUP_ID, report)
-            # Ответ пользователю
-            send_msg(chat_id, "🚀 Заявка успешно отправлена в группу @ModerationZ!")
+    state = user_states[chat_id]
+    idx = STATES.index(state)
+    current_val = text if text else file_id
+    
+    if state == "SCREENSHOTS":
+        if text and text.lower() == "готово": pass
         else:
-            send_msg(chat_id, "Отправка отменена. Используйте /start чтобы начать заново.")
-        
-        user_states[chat_id] = "START"
+            if file_id: user_data[chat_id]["screenshots"].append(file_id)
+            send_msg(chat_id, f"Скриншот получен ({len(user_data[chat_id]['screenshots'])}/8). Отправьте еще или 'готово'.")
+            return
+    elif state == "EXTRA_FILES":
+        if text and text.lower() == "готово": pass
+        else:
+            if file_id: user_data[chat_id]["extra_files"].append(file_id)
+            send_msg(chat_id, f"Доп. файл получен. Отправьте еще или 'готово'.")
+            return
+    else:
+        user_data[chat_id][state] = current_val
+
+    if idx + 1 < len(STATES):
+        next_state = STATES[idx + 1]
+        user_states[chat_id] = next_state
+        prompts = {
+            "DESC": "Введите <b>Описание</b>:",
+            "ICON": "Отправьте <b>Иконку</b> (URL или файл):",
+            "TITLE": "Введите <b>Заголовок*</b> (Обязательно!):",
+            "CATEGORY": "Введите <b>Категорию</b>:",
+            "PRICE": "Введите <b>Цену</b>:",
+            "VERSION": "Введите <b>Версию</b>:",
+            "L1": "Ссылка 1 (название = ссылка):",
+            "L2": "Ссылка 2 (название = ссылка):",
+            "L3": "Ссылка 3 (название = ссылка):",
+            "L4": "Ссылка 4 (название = ссылка):",
+            "NOTE": "Введите <b>Примечание к игре</b>:",
+            "COMMENTS": "<b>Комментарии:</b> Ссылка на ТГ или Zoro Store:",
+            "BG": "Отправьте <b>Фоновое изображение</b>:",
+            "CHANGELOG": "Описание последних изменений:",
+            "GAME_FILE": "Загрузите <b>Файл игры</b>:",
+            "GAME_ICON": "Загрузите <b>Иконку игры</b>:",
+            "SCREENSHOTS": "Отправьте <b>Скриншоты</b> (до 8). Пишите 'готово'.",
+            "EXTRA_FILES": "Доп. файлы (до 8). Пишите 'готово'.",
+            "EXTRA_NAMES": "Введите названия для доп. файлов:",
+            "CONFIRM": "Напишите <b>ДА</b> для отправки."
+        }
+        send_msg(chat_id, prompts.get(next_state, "Продолжаем..."))
+    else:
+        d = user_data[chat_id]
+        report = (
+            f"<b>🆕 ЗАЯВКА @{msg['from'].get('username', 'н/д')}</b>\n"
+            f"━━━━━━━━━━━━━\n"
+            f"<b>Заголовок*:</b> {d.get('TITLE')}\n"
+            f"<b>Цена:</b> {d.get('PRICE')}\n"
+            f"<b>Версия:</b> {d.get('VERSION')}\n"
+            f"<b>Ссылки:</b> {d.get('L1')}, {d.get('L2')}\n"
+            f"━━━━━━━━━━━━━\n"
+        )
+        send_msg(GROUP_ID, report)
+        if d.get("GAME_FILE"): bot_api("sendDocument", {"chat_id": GROUP_ID, "document": d["GAME_FILE"], "caption": "📦 Файл игры"})
+        send_msg(chat_id, "✅ Отправлено в группу модерации.")
+        user_states[chat_id] = None
 
 def main():
-    print("Бот активирован...")
-    set_commands() # Регистрируем команды в меню Telegram
+    # Запускаем веб-сервер в отдельном потоке
+    threading.Thread(target=run_health_server, daemon=True).start()
+    
+    print("Бот запущен...")
+    set_commands()
     offset = 0
     while True:
         updates = bot_api("getUpdates", {"offset": offset, "timeout": 20})
