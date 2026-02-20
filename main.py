@@ -78,24 +78,20 @@ def handle_update(update):
             send_msg(chat_id, "❌ Заполнение отменено.")
             return
         
-                if text == "/start":
+        if text == "/start":
             user_states[chat_id] = STATES[0]
             user_data[chat_id] = {"screenshots": [], "extra_files": []}
-            
-            # Получаем никнейм или имя пользователя
             user_name = msg["from"].get("first_name", "пользователь")
-            
-            welcome_text = (
+            welcome = (
                 f"👋 <b>Привет, {user_name}!</b>\n\n"
-                f"🎮 Это официальный бот модерации <b>Zoro Store</b>.\n"
-                f"Здесь вы можете отправить свою игру на проверку.\n\n"
-                f"⚠️ <b>Инструкция:</b>\n"
-                f"• Если хотите пропустить необязательное поле, отправьте просто точку: <code>.</code>\n"
-                f"• В разделах с несколькими файлами пишите <b>«готово»</b> (я подскажу, когда это нужно).\n\n"
+                f"🎮 Это бот для модерации ваших игр!\n\n"
+                f"⚠️ <b>Предупреждение:</b>\n"
+                f"• Если хотите пропустить поле, напишите просто точку: <code>.</code> (где это можно)\n"
+                f"• В разделах с файлами пишите <b>«готово»</b> (я подскажу, где это нужно).\n\n"
                 f"🚀 <b>Начнем!</b>\n"
                 f"Шаг 1: Введите <b>Название для ссылки</b>:"
             )
-            send_msg(chat_id, welcome_text)
+            send_msg(chat_id, welcome)
             return
 
         state = user_states.get(chat_id)
@@ -139,7 +135,6 @@ def handle_update(update):
                 }
                 send_msg(chat_id, f"Шаг {idx+2}: {prompts.get(next_s, 'Продолжаем...')}")
             else:
-                # ФОРМИРОВАНИЕ ПОЛНОГО ОТЧЕТА
                 d = user_data[chat_id]
                 full_report = (
                     f"<b>📥 ПОЛНАЯ ЗАЯВКА @{msg['from'].get('username', 'н/д')}</b>\n"
@@ -162,19 +157,18 @@ def handle_update(update):
                     {"text": "❌ Отклонить", "callback_data": f"reject_{chat_id}"}
                 ]]}
                 
-                # 1. Текст
                 send_msg(GROUP_ID, full_report, reply_markup=kb)
                 
-                # 2. Пересылка всех медиа
-                if d.get("ICON") and len(str(d["ICON"])) > 20: bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["ICON"], "caption": "🖼 Иконка ссылки"})
+                # Пересылка всех медиа
+                if d.get("ICON") and len(str(d["ICON"])) > 20: bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["ICON"], "caption": "🖼 Иконка"})
                 if d.get("BG") and len(str(d["BG"])) > 20: bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["BG"], "caption": "🌌 Фон"})
-                if d.get("GAME_FILE"): bot_api("sendDocument", {"chat_id": GROUP_ID, "document": d["GAME_FILE"], "caption": "📦 Файл игры"})
+                if d.get("GAME_FILE"): bot_api("sendDocument", {"chat_id": GROUP_ID, "document": d["GAME_FILE"], "caption": "📦 Файл"})
                 if d.get("GAME_ICON"): bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["GAME_ICON"], "caption": "🎮 Иконка игры"})
                 if d.get("screenshots"): bot_api("sendMediaGroup", {"chat_id": GROUP_ID, "media": [{"type":"photo", "media": f} for f in d["screenshots"]]})
                 if d.get("extra_files"): 
                     for f in d["extra_files"]: bot_api("sendDocument", {"chat_id": GROUP_ID, "document": f, "caption": "📎 Доп. файл"})
 
-                send_msg(chat_id, "✅ Вся информация успешно отправлена на модерацию!")
+                send_msg(chat_id, "✅ Информация отправлена на модерацию!")
                 user_states[chat_id] = None
 
 def main():
