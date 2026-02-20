@@ -14,8 +14,10 @@ API_URL = f"https://api.telegram.org/bot{TOKEN}/"
 def run_health_server():
     port = int(os.environ.get("PORT", 10000))
     server_address = ('', port)
-    httpd = http.server.HTTPServer(server_address, http.server.SimpleHTTPRequestHandler)
-    httpd.serve_forever()
+    try:
+        httpd = http.server.HTTPServer(server_address, http.server.SimpleHTTPRequestHandler)
+        httpd.serve_forever()
+    except Exception: pass
 
 # --- ЭТАПЫ ОПРОСА ---
 STATES = [
@@ -36,7 +38,6 @@ def bot_api(method, data=None):
         with urllib.request.urlopen(req, timeout=15) as response:
             return json.loads(response.read().decode())
     except Exception as e:
-        print(f"Ошибка API {method}: {e}")
         return None
 
 def send_msg(chat_id, text, reply_markup=None):
@@ -51,7 +52,7 @@ def handle_update(update):
         action, target_user_id = cb["data"].split("_")
         status = "ОДОБРЕНИЯ" if action == "approve" else "ОТКЛОНЕНИЯ"
         moderation_pending[GROUP_ID] = {"target": target_user_id, "action": action, "msg_id": cb["message"]["message_id"]}
-        bot_api("answerCallbackQuery", {"callback_query_id": cb["id"], "text": "Жду комментарий..."})
+        bot_api("answerCallbackQuery", {"callback_query_id": cb["id"]})
         send_msg(GROUP_ID, f"📝 <b>Модератор @{cb['from'].get('username', 'admin')}, напишите причину {status}:</b>")
         return
 
@@ -75,8 +76,9 @@ def handle_update(update):
     if msg["chat"]["type"] == "private":
         if text == "/cancel":
             user_states[chat_id] = None
-            send_msg(chat_id, "❌ Отменено.")
+            send_msg(chat_id, "❌ Заполнение отменено.")
             return
+        
         if text == "/start":
             user_states[chat_id] = STATES[0]
             user_data[chat_id] = {"screenshots": [], "extra_files": []}
@@ -86,104 +88,96 @@ def handle_update(update):
         state = user_states.get(chat_id)
         if not state: return
 
-        # Получаем ID файла (если это фото или документ)
+        # Получаем файл
         file_id = None
         if "photo" in msg: file_id = msg["photo"][-1]["file_id"]
         elif "document" in msg: file_id = msg["document"]["file_id"]
 
-        # Специальная обработка списков
+        # 1. ОБРАБОТКА ТЕКУЩЕГО ШАГА
+        is_ready_to_next = True
+        
         if state == "SCREENSHOTS":
-            if text and text.lower() == "готово": pass
+            if text and text.lower() == "готово": is_ready_to_next = True
             else:
                 if file_id: user_data[chat_id]["screenshots"].append(file_id)
                 send_msg(chat_id, f"Скриншот получен ({len(user_data[chat_id]['screenshots'])}/8). Еще или 'готово'?")
-                return
+                is_ready_to_next = False
         elif state == "EXTRA_FILES":
-            if text and text.lower() == "готово": pass
+            if text and text.lower() == "готово": is_ready_to_next = True
             else:
                 if file_id: user_data[chat_id]["extra_files"].append(file_id)
                 send_msg(chat_id, "Файл получен. Еще или 'готово'?")
-                return
+                is_ready_to_next = False
         else:
-            # Сохраняем либо ID файла, либо текст (ссылку)
             user_data[chat_id][state] = file_id if file_id else text
 
-        idx = STATES.index(state)
-        if idx + 1 < len(STATES):
-            next_s = STATES[idx + 1]
-            user_states[chat_id] = next_s
-            prompts = {
-                "DESC": "Введите <b>Описание</b>:", "ICON": "Отправьте <b>Иконку</b> (файлом или ссылкой):",
-                "TITLE": "Введите <b>Заголовок*</b>:", "CATEGORY": "Введите <b>Категорию</b>:",
-                "PRICE": "Введите <b>Цену</b>:", "VERSION": "Введите <b>Версию</b>:",
-                "L1": "Ссылка 1:", "L2": "Ссылка 2:", "L3": "Ссылка 3:", "L4": "Ссылка 4:",
-                "NOTE": "<b>Примечание</b>:", "COMMENTS": "<b>Комментарии</b>:",
-                "BG": "Отправьте <b>Фоновое изображение</b> (файл/URL):", "CHANGELOG": "<b>Изменения</b>:",
-                "GAME_FILE": "Загрузите <b>Файл игры</b>:", "GAME_ICON": "Загрузите <b>Иконку игры</b>:",
-                "SCREENSHOTS": "Отправьте <b>Скриншоты</b> (до 8). Напишите 'готово'.",
-                "EXTRA_FILES": "Доп. файлы (до 8). Напишите 'готово'.",
-                "EXTRA_NAMES": "Введите <b>названия</b> доп. файлов:",
-                "CONFIRM": "Все данные введены. Напишите <b>ДА</b> для отправки."
-            }
-            send_msg(chat_id, prompts.get(next_s, "Далее..."))
-        else:
-            d = user_data[chat_id]
-            # Текстовый отчет (без медиа-ID, чтобы не загромождать текст)
-            report = (
-                f"<b>📥 НОВАЯ ЗАЯВКА @{msg['from'].get('username', 'н/д')}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"🔥 <b>Заголовок*:</b> {d.get('TITLE')}\n"
-                f"🏷 <b>Название ссылки:</b> {d.get('LINK_NAME')}\n"
-                f"📂 <b>Категория:</b> {d.get('CATEGORY')}\n"
-                f"💰 <b>Цена:</b> {d.get('PRICE')}\n"
-                f"🆙 <b>Версия:</b> {d.get('VERSION')}\n"
-                f"📝 <b>Описание:</b> {d.get('DESC')}\n"
-                f"🛠 <b>Changes:</b> {d.get('CHANGELOG')}\n"
-                f"🔗 <b>Ссылки:</b> {d.get('L1')}, {d.get('L2')}, {d.get('L3')}, {d.get('L4')}\n"
-                f"━━━━━━━━━━━━━━━━━━"
-            )
-            kb = {"inline_keyboard": [[
-                {"text": "✅ Одобрить", "callback_data": f"approve_{chat_id}"},
-                {"text": "❌ Отклонить", "callback_data": f"reject_{chat_id}"}
-            ]]}
-            
-            # 1. Отправляем текст с кнопками
-            send_msg(GROUP_ID, report, reply_markup=kb)
+        # 2. ПЕРЕХОД К СЛЕДУЮЩЕМУ ШАГУ (только если шаг завершен)
+        if is_ready_to_next:
+            idx = STATES.index(state)
+            if idx + 1 < len(STATES):
+                next_s = STATES[idx + 1]
+                user_states[chat_id] = next_s
+                
+                prompts = {
+                    "DESC": "Введите <b>Описание</b>:", 
+                    "ICON": "Отправьте <b>Иконку</b> (файлом или ссылкой):",
+                    "TITLE": "Введите <b>Заголовок*</b>:", 
+                    "CATEGORY": "Введите <b>Категорию</b>:",
+                    "PRICE": "Введите <b>Цену</b>:", 
+                    "VERSION": "Введите <b>Версию</b>:",
+                    "L1": "Ссылка 1:", "L2": "Ссылка 2:", "L3": "Ссылка 3:", "L4": "Ссылка 4:",
+                    "NOTE": "<b>Примечание</b>:", "COMMENTS": "<b>Комментарии</b>:",
+                    "BG": "Отправьте <b>Фоновое изображение</b>:", 
+                    "CHANGELOG": "<b>Изменения</b>:",
+                    "GAME_FILE": "Загрузите <b>Файл игры</b>:", 
+                    "GAME_ICON": "Загрузите <b>Иконку игры</b>:",
+                    "SCREENSHOTS": "Отправьте <b>Скриншоты</b> (до 8). Напишите 'готово'.",
+                    "EXTRA_FILES": "Доп. файлы (до 8). Напишите 'готово'.",
+                    "EXTRA_NAMES": "Введите <b>названия</b> доп. файлов:",
+                    "CONFIRM": "Все введено. Напишите <b>ДА</b> для отправки."
+                }
+                send_msg(chat_id, prompts.get(next_s, "Далее..."))
+            else:
+                # ОТПРАВКА В ГРУППУ
+                d = user_data[chat_id]
+                report = (
+                    f"<b>📥 НОВАЯ ЗАЯВКА @{msg['from'].get('username', 'н/д')}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"🔥 <b>Заголовок*:</b> {d.get('TITLE')}\n"
+                    f"🏷 <b>Название ссылки:</b> {d.get('LINK_NAME')}\n"
+                    f"📂 <b>Категория:</b> {d.get('CATEGORY')}\n"
+                    f"💰 <b>Цена:</b> {d.get('PRICE')}\n"
+                    f"🆙 <b>Версия:</b> {d.get('VERSION')}\n"
+                    f"📝 <b>Описание:</b> {d.get('DESC')}\n"
+                    f"━━━━━━━━━━━━━━━━━━"
+                )
+                kb = {"inline_keyboard": [[
+                    {"text": "✅ Одобрить", "callback_data": f"approve_{chat_id}"},
+                    {"text": "❌ Отклонить", "callback_data": f"reject_{chat_id}"}
+                ]]}
+                
+                send_msg(GROUP_ID, report, reply_markup=kb)
+                
+                # Медиа пересылка
+                if d.get("ICON") and len(str(d["ICON"])) > 20: bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["ICON"], "caption": "🖼 Иконка"})
+                if d.get("GAME_FILE"): bot_api("sendDocument", {"chat_id": GROUP_ID, "document": d["GAME_FILE"], "caption": "📦 Файл игры"})
+                if d.get("screenshots"): bot_api("sendMediaGroup", {"chat_id": GROUP_ID, "media": [{"type":"photo", "media": f} for f in d["screenshots"]]})
 
-            # 2. Пересылаем медиа, если это ID файла
-            if d.get("ICON") and len(str(d["ICON"])) > 20: # Проверка на ID файла
-                bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["ICON"], "caption": "🖼 Иконка (из шага 3)"})
-            
-            if d.get("BG") and len(str(d["BG"])) > 20:
-                bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["BG"], "caption": "🌌 Фон (из шага 14)"})
-
-            if d.get("GAME_FILE"):
-                bot_api("sendDocument", {"chat_id": GROUP_ID, "document": d["GAME_FILE"], "caption": "📦 Файл игры"})
-            
-            if d.get("GAME_ICON"):
-                bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["GAME_ICON"], "caption": "🎮 Иконка приложения"})
-
-            if d.get("screenshots"):
-                bot_api("sendMediaGroup", {"chat_id": GROUP_ID, "media": [{"type":"photo", "media": f} for f in d["screenshots"]]})
-
-            if d.get("extra_files"):
-                for f_id in d["extra_files"]:
-                    bot_api("sendDocument", {"chat_id": GROUP_ID, "document": f_id, "caption": "📎 Доп. файл"})
-
-            send_msg(chat_id, "✅ Заявка и все файлы успешно переданы в @ModerationZ!")
-            user_states[chat_id] = None
+                send_msg(chat_id, "✅ Заявка отправлена в @ModerationZ!")
+                user_states[chat_id] = None
 
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
     bot_api("setMyCommands", {"commands": [{"command":"start","description":"Начать"},{"command":"cancel","description":"Отмена"}]})
     offset = 0
+    print("Бот запущен...")
     while True:
         updates = bot_api("getUpdates", {"offset": offset, "timeout": 20})
         if updates and "result" in updates:
             for up in updates["result"]:
                 handle_update(up)
-                offset = up["update_id"] + 1
-        time.sleep(1)
+                offset = up["update_id"] + 1 # Сдвигаем offset СРАЗУ после обработки каждого сообщения
+        time.sleep(0.5)
 
 if __name__ == "__main__":
     main()
