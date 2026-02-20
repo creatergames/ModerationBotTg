@@ -26,7 +26,6 @@ STATES = [
 
 user_states = {}
 user_data = {}
-# Ожидание комментария от модератора: {chat_id_группы: {"target_user": ID, "action": "approve/reject"}}
 moderation_pending = {}
 
 def bot_api(method, data=None):
@@ -46,16 +45,14 @@ def send_msg(chat_id, text, reply_markup=None):
     return bot_api("sendMessage", payload)
 
 def handle_update(update):
-    # --- ОБРАБОТКА КНОПОК МОДЕРАЦИИ ---
+    # --- МОДЕРАЦИЯ (КНОПКИ) ---
     if "callback_query" in update:
         cb = update["callback_query"]
         action, target_user_id = cb["data"].split("_")
-        
         status = "ОДОБРЕНИЯ" if action == "approve" else "ОТКЛОНЕНИЯ"
         moderation_pending[GROUP_ID] = {"target": target_user_id, "action": action, "msg_id": cb["message"]["message_id"]}
-        
-        bot_api("answerCallbackQuery", {"callback_query_id": cb["id"], "text": "Жду комментарий в чате..."})
-        send_msg(GROUP_ID, f"📝 <b>Модератор @{cb['from'].get('username')}, напишите причину {status}:</b>\n(Просто отправьте сообщение в этот чат)")
+        bot_api("answerCallbackQuery", {"callback_query_id": cb["id"], "text": "Жду комментарий..."})
+        send_msg(GROUP_ID, f"📝 <b>Модератор @{cb['from'].get('username', 'admin')}, напишите причину {status}:</b>")
         return
 
     if "message" not in update: return
@@ -63,30 +60,23 @@ def handle_update(update):
     chat_id = msg["chat"]["id"]
     text = msg.get("text", "")
 
-    # --- ЛОГИКА КОММЕНТАРИЯ В ГРУППЕ ---
+    # --- КОММЕНТАРИЙ МОДЕРАТОРА В ГРУППЕ ---
     if chat_id == GROUP_ID and chat_id in moderation_pending:
         p = moderation_pending.pop(chat_id)
-        final_status = "ОДОБРЕНА" if p["action"] == "approve" else "ОТКЛОНЕНА"
-        
-        # Уведомляем пользователя
-        send_msg(int(p["target"]), f"🔔 <b>Ваша заявка {final_status}!</b>\n\n💬 Комментарий модератора: <i>{text}</i>")
-        
-        # Обновляем пост в группе
+        res = "ОДОБРЕНА" if p["action"] == "approve" else "ОТКЛОНЕНА"
+        send_msg(int(p["target"]), f"🔔 <b>Ваша заявка {res}!</b>\n\n💬 Комментарий: <i>{text}</i>")
         bot_api("editMessageText", {
-            "chat_id": GROUP_ID,
-            "message_id": p["msg_id"],
-            "text": f"✅ <b>Заявка обработана</b>\nРезультат: {final_status}\nПричина: {text}",
-            "parse_mode": "HTML"
+            "chat_id": GROUP_ID, "message_id": p["msg_id"],
+            "text": f"✅ <b>Обработано</b>\nРезультат: {res}\nПричина: {text}", "parse_mode": "HTML"
         })
         return
 
-    # --- ЛОГИКА ПОЛЬЗОВАТЕЛЯ (ЛС) ---
+    # --- ЛОГИКА ПОЛЬЗОВАТЕЛЯ ---
     if msg["chat"]["type"] == "private":
         if text == "/cancel":
             user_states[chat_id] = None
-            send_msg(chat_id, "❌ Заполнение отменено.")
+            send_msg(chat_id, "❌ Отменено.")
             return
-
         if text == "/start":
             user_states[chat_id] = STATES[0]
             user_data[chat_id] = {"screenshots": [], "extra_files": []}
@@ -96,10 +86,12 @@ def handle_update(update):
         state = user_states.get(chat_id)
         if not state: return
 
-        idx = STATES.index(state)
-        file_id = msg["document"]["file_id"] if "document" in msg else (msg["photo"][-1]["file_id"] if "photo" in msg else None)
+        # Получаем ID файла (если это фото или документ)
+        file_id = None
+        if "photo" in msg: file_id = msg["photo"][-1]["file_id"]
+        elif "document" in msg: file_id = msg["document"]["file_id"]
 
-        # Сохранение медиа
+        # Специальная обработка списков
         if state == "SCREENSHOTS":
             if text and text.lower() == "готово": pass
             else:
@@ -113,71 +105,72 @@ def handle_update(update):
                 send_msg(chat_id, "Файл получен. Еще или 'готово'?")
                 return
         else:
-            user_data[chat_id][state] = text if text else file_id
+            # Сохраняем либо ID файла, либо текст (ссылку)
+            user_data[chat_id][state] = file_id if file_id else text
 
-        # Переход к следующему шагу
+        idx = STATES.index(state)
         if idx + 1 < len(STATES):
             next_s = STATES[idx + 1]
             user_states[chat_id] = next_s
             prompts = {
-                "DESC": "Введите <b>Описание</b>:",
-                "ICON": "Отправьте <b>Иконку</b> (файл или ссылку):",
-                "TITLE": "Введите <b>Заголовок*</b> (Обязательно):",
-                "CATEGORY": "Введите <b>Категорию</b>:",
-                "PRICE": "Введите <b>Цену</b>:",
-                "VERSION": "Введите <b>Версию</b>:",
-                "L1": "Ссылка 1 (название = ссылка):",
-                "L2": "Ссылка 2 (название = ссылка):",
-                "L3": "Ссылка 3 (название = ссылка):",
-                "L4": "Ссылка 4 (название = ссылка):",
-                "NOTE": "Введите <b>Примечание к игре</b>:",
-                "COMMENTS": "<b>Комментарии</b> (ссылка или Zoro Store):",
-                "BG": "Отправьте <b>Фоновое изображение</b>:",
-                "CHANGELOG": "Описание <b>изменений</b>:",
-                "GAME_FILE": "Загрузите <b>Файл игры</b>:",
-                "GAME_ICON": "Загрузите <b>Иконку игры</b>:",
-                "SCREENSHOTS": "Отправьте <b>Скриншоты</b> (до 8). Напишите 'готово' для завершения.",
+                "DESC": "Введите <b>Описание</b>:", "ICON": "Отправьте <b>Иконку</b> (файлом или ссылкой):",
+                "TITLE": "Введите <b>Заголовок*</b>:", "CATEGORY": "Введите <b>Категорию</b>:",
+                "PRICE": "Введите <b>Цену</b>:", "VERSION": "Введите <b>Версию</b>:",
+                "L1": "Ссылка 1:", "L2": "Ссылка 2:", "L3": "Ссылка 3:", "L4": "Ссылка 4:",
+                "NOTE": "<b>Примечание</b>:", "COMMENTS": "<b>Комментарии</b>:",
+                "BG": "Отправьте <b>Фоновое изображение</b> (файл/URL):", "CHANGELOG": "<b>Изменения</b>:",
+                "GAME_FILE": "Загрузите <b>Файл игры</b>:", "GAME_ICON": "Загрузите <b>Иконку игры</b>:",
+                "SCREENSHOTS": "Отправьте <b>Скриншоты</b> (до 8). Напишите 'готово'.",
                 "EXTRA_FILES": "Доп. файлы (до 8). Напишите 'готово'.",
                 "EXTRA_NAMES": "Введите <b>названия</b> доп. файлов:",
-                "CONFIRM": "Все данные введены. Напишите <b>ДА</b> для отправки на модерацию."
+                "CONFIRM": "Все данные введены. Напишите <b>ДА</b> для отправки."
             }
-            send_msg(chat_id, prompts.get(next_s, "Следующий шаг..."))
+            send_msg(chat_id, prompts.get(next_s, "Далее..."))
         else:
-            # ОТПРАВКА ВСЕХ ДАННЫХ В ГРУППУ
             d = user_data[chat_id]
+            # Текстовый отчет (без медиа-ID, чтобы не загромождать текст)
             report = (
                 f"<b>📥 НОВАЯ ЗАЯВКА @{msg['from'].get('username', 'н/д')}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"🏷 <b>Название ссылки:</b> {d.get('LINK_NAME')}\n"
-                f"📖 <b>Описание:</b> {d.get('DESC')}\n"
-                f"🖼 <b>Иконка:</b> {d.get('ICON')}\n"
                 f"🔥 <b>Заголовок*:</b> {d.get('TITLE')}\n"
+                f"🏷 <b>Название ссылки:</b> {d.get('LINK_NAME')}\n"
                 f"📂 <b>Категория:</b> {d.get('CATEGORY')}\n"
                 f"💰 <b>Цена:</b> {d.get('PRICE')}\n"
                 f"🆙 <b>Версия:</b> {d.get('VERSION')}\n"
-                f"🔗 <b>Ссылки:</b>\n1: {d.get('L1')}\n2: {d.get('L2')}\n3: {d.get('L3')}\n4: {d.get('L4')}\n"
-                f"📝 <b>Примечание:</b> {d.get('NOTE')}\n"
-                f"💬 <b>Комменты:</b> {d.get('COMMENTS')}\n"
-                f"🌌 <b>Фон:</b> {d.get('BG')}\n"
-                f"🛠 <b>Changelog:</b> {d.get('CHANGELOG')}\n"
-                f"📁 <b>Доп. файлы имена:</b> {d.get('EXTRA_NAMES')}\n"
+                f"📝 <b>Описание:</b> {d.get('DESC')}\n"
+                f"🛠 <b>Changes:</b> {d.get('CHANGELOG')}\n"
+                f"🔗 <b>Ссылки:</b> {d.get('L1')}, {d.get('L2')}, {d.get('L3')}, {d.get('L4')}\n"
                 f"━━━━━━━━━━━━━━━━━━"
             )
-            
             kb = {"inline_keyboard": [[
                 {"text": "✅ Одобрить", "callback_data": f"approve_{chat_id}"},
                 {"text": "❌ Отклонить", "callback_data": f"reject_{chat_id}"}
             ]]}
             
+            # 1. Отправляем текст с кнопками
             send_msg(GROUP_ID, report, reply_markup=kb)
+
+            # 2. Пересылаем медиа, если это ID файла
+            if d.get("ICON") and len(str(d["ICON"])) > 20: # Проверка на ID файла
+                bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["ICON"], "caption": "🖼 Иконка (из шага 3)"})
             
-            # Пересылка медиа
-            if d.get("GAME_FILE"): bot_api("sendDocument", {"chat_id": GROUP_ID, "document": d["GAME_FILE"], "caption": "📦 Файл игры"})
-            if d.get("GAME_ICON"): bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["GAME_ICON"], "caption": "🖼 Иконка игры"})
+            if d.get("BG") and len(str(d["BG"])) > 20:
+                bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["BG"], "caption": "🌌 Фон (из шага 14)"})
+
+            if d.get("GAME_FILE"):
+                bot_api("sendDocument", {"chat_id": GROUP_ID, "document": d["GAME_FILE"], "caption": "📦 Файл игры"})
+            
+            if d.get("GAME_ICON"):
+                bot_api("sendPhoto", {"chat_id": GROUP_ID, "photo": d["GAME_ICON"], "caption": "🎮 Иконка приложения"})
+
             if d.get("screenshots"):
                 bot_api("sendMediaGroup", {"chat_id": GROUP_ID, "media": [{"type":"photo", "media": f} for f in d["screenshots"]]})
 
-            send_msg(chat_id, "✅ Ваша заявка отправлена в @ModerationZ! Ожидайте решения.")
+            if d.get("extra_files"):
+                for f_id in d["extra_files"]:
+                    bot_api("sendDocument", {"chat_id": GROUP_ID, "document": f_id, "caption": "📎 Доп. файл"})
+
+            send_msg(chat_id, "✅ Заявка и все файлы успешно переданы в @ModerationZ!")
             user_states[chat_id] = None
 
 def main():
