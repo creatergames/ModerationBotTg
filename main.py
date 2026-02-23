@@ -19,7 +19,7 @@ WEB_APP_URL = "https://zoro-game.store/"
 
 logging.basicConfig(level=logging.INFO)
 
-# --- SERVER ---
+# --- SERVER FOR HEALTH CHECKS ---
 class HealthServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers()
@@ -34,20 +34,19 @@ def run_server():
 RULES_FULL = """
 *ZORO GAME STORE - ПРАВИЛА*
 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-1. Название: 2-25 символов, без мата и ссылок.
+1. Название: 2-25 символов.
 2. Теги: Соответствующие жанру.
-3. Студия: Имя разработчика или название команды.
-4. Обложка: Формат 16:9, без порнографии и шок-контента.
-5. Скриншоты: Минимум 3 основных.
-6. Описание: Без копипаста и ссылок на сторонние ресурсы.
-7. Версия: Числа, Beta, Alpha, Release.
-8. Файл: APK, EXE, HTML до 100 ГБ. Без вирусов!
-9. Плакат: 164px x 256px.
-10. Цена: От 3 ₽ до 50 000 ₽.
-11. Ссылки: Запрещены платформы Meta* и сайты, нарушающие законы РФ.
+3. Студия: Имя разработчика/команды.
+4. Обложка: 16:9, без запрещенки.
+5. Скриншоты: Минимум 3 шт.
+6. Описание: Уникальный текст.
+7. Версия: Формат 1.0.0 или Beta.
+8. Файл: До 100 ГБ, без вирусов.
+9. Плакат: 164x256px.
+10. Цена: 3 ₽ — 50 000 ₽.
+11. Ссылки: Без Meta* и нарушений закона.
 
 *Приложение не должно нарушать конституцию РФ.*
-*принадлежит запрещенной в РФ Meta
 """
 
 # --- UI ---
@@ -65,15 +64,15 @@ def survey_menu(can_skip=True):
     btns.append("❌ ВЕРНУТЬСЯ В МЕНЮ")
     return ReplyKeyboardMarkup([btns], resize_keyboard=True)
 
-# --- ЛОГИКА ---
+# --- ЛОГИКА АНКЕТЫ ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💎 *Zoro Game Store v7.0*\nВсе системы активны.", reply_markup=main_menu(), parse_mode="Markdown")
+    await update.message.reply_text("💎 *Zoro Game Store v7.0*\nВыберите действие в меню:", reply_markup=main_menu(), parse_mode="Markdown")
     return ConversationHandler.END
 
 async def mini_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     score = context.user_data.get('click_score', 0)
     context.user_data['click_score'] = score + 1
-    await update.message.reply_text(f"🎯 **ZORO CLICKER**\n\nВы кликнули: {score + 1} раз(а)!\nЖмите еще раз на кнопку в меню, чтобы играть.", parse_mode="Markdown")
+    await update.message.reply_text(f"🎯 **ZORO CLICKER**\nВы кликнули: {score + 1} раз(а)!", parse_mode="Markdown")
 
 async def engine(u, c, key, next_s, txt, skip=True):
     if u.message.text == "❌ ВЕРНУТЬСЯ В МЕНЮ": return await start(u, c)
@@ -83,63 +82,95 @@ async def engine(u, c, key, next_s, txt, skip=True):
     if u.message.text == "⏩ ПРОПУСТИТЬ":
         c.user_data[key] = "—"
     else:
-        # Сохраняем текст или помечаем наличие файла
         if u.message.text:
             c.user_data[key] = u.message.text
         else:
             c.user_data['media'].append(u.message.message_id)
-            c.user_data[key] = "📎 [Файл прикреплен]"
+            c.user_data[key] = "📎 [Медиа-файл]"
 
     await u.message.reply_text(txt, reply_markup=survey_menu(skip), parse_mode="Markdown")
     return next_s
 
-# Шаги анкеты
 async def st_start(u,c): 
+    c.user_data.clear() # Полная очистка перед новой анкетой
     c.user_data['media'] = []
-    await u.message.reply_text("1️⃣ *Название для ссылки:*", reply_markup=survey_menu())
+    await u.message.reply_text("1️⃣ *Название для ссылки (URL ID):*", reply_markup=survey_menu())
     return S1
 
-async def s1(u,c): return await engine(u,c,'q1', S2, "2️⃣ *Описание:*")
-async def s2(u,c): return await engine(u,c,'q2', S3, "3️⃣ *Иконка (URL/Файл):*")
-async def s3(u,c): return await engine(u,c,'q3', S4, "4️⃣ *ЗАГОЛОВОК*:", False)
+# Регистрация шагов
+async def s1(u,c): return await engine(u,c,'q1', S2, "2️⃣ *Описание проекта:*")
+async def s2(u,c): return await engine(u,c,'q2', S3, "3️⃣ *Иконка (URL или Файл):*")
+async def s3(u,c): return await engine(u,c,'q3', S4, "4️⃣ *ЗАГОЛОВОК (Название игры):*", False)
 async def s4(u,c): return await engine(u,c,'q4', S5, "5️⃣ *Категория:*")
-async def s5(u,c): return await engine(u,c,'q5', S6, "6️⃣ *Цена:*")
-async def s6(u,c): return await engine(u,c,'q6', S7, "7️⃣ *Версия:*")
-async def s7(u,c): return await engine(u,c,'q7', S8, "8️⃣ *Ссылка 1:*")
-async def s8(u,c): return await engine(u,c,'q8', S9, "9️⃣ *Ссылка 2:*")
-async def s9(u,c): return await engine(u,c,'q9', S10, "🔟 *Ссылка 3:*")
-async def s10(u,c): return await engine(u,c,'q10', S11, "1️⃣1️⃣ *Ссылка 4:*")
-async def s11(u,c): return await engine(u,c,'q11', S12, "1️⃣2️⃣ *Примечание:*")
-async def s12(u,c): return await engine(u,c,'q12', S13, "1️⃣3️⃣ *Комментарии:*")
-async def s13(u,c): return await engine(u,c,'q13', S14, "1️⃣4️⃣ *Фоновое изображение:*")
-async def s14(u,c): return await engine(u,c,'q14', S15, "1️⃣5️⃣ *Лог изменений:*")
-async def s15(u,c): return await engine(u,c,'q15', S16, "1️⃣6️⃣ *Файл игры:*")
-async def s16(u,c): return await engine(u,c,'q16', S17, "1️⃣7️⃣ *Иконка игры:*")
-async def s17(u,c): return await engine(u,c,'q17', S18, "1️⃣8️⃣ *Скриншоты:*")
-async def s18(u,c): return await engine(u,c,'q18', S19, "1️⃣9️⃣ *Дополнительные файлы:*")
+async def s5(u,c): return await engine(u,c,'q5', S6, "6️⃣ *Цена (в рублях):*")
+async def s6(u,c): return await engine(u,c,'q6', S7, "7️⃣ *Версия проекта:*")
+async def s7(u,c): return await engine(u,c,'q7', S8, "8️⃣ *Ссылка №1:*")
+async def s8(u,c): return await engine(u,c,'q8', S9, "9️⃣ *Ссылка №2:*")
+async def s9(u,c): return await engine(u,c,'q9', S10, "🔟 *Ссылка №3:*")
+async def s10(u,c): return await engine(u,c,'q10', S11, "1️⃣1️⃣ *Ссылка №4:*")
+async def s11(u,c): return await engine(u,c,'q11', S12, "1️⃣2️⃣ *Примечание к игре:*")
+async def s12(u,c): return await engine(u,c,'q12', S13, "1️⃣3️⃣ *Комментарии разработчика:*")
+async def s13(u,c): return await engine(u,c,'q13', S14, "1️⃣4️⃣ *Фоновое изображение (URL/Файл):*")
+async def s14(u,c): return await engine(u,c,'q14', S15, "1️⃣5️⃣ *Список изменений (Changelog):*")
+async def s15(u,c): return await engine(u,c,'q15', S16, "1️⃣6️⃣ *Файл игры (APK/EXE/Документ):*")
+async def s16(u,c): return await engine(u,c,'q16', S17, "1️⃣7️⃣ *Иконка игры (прозрачная):*")
+async def s17(u,c): return await engine(u,c,'q17', S18, "1️⃣8️⃣ *Скриншоты (одним сообщением или файлом):*")
+async def s18(u,c): return await engine(u,c,'q18', S19, "1️⃣9️⃣ *Дополнительные файлы и их названия:*")
 
 async def final(u,c):
     if not u.message.text: c.user_data['media'].append(u.message.message_id)
+    c.user_data['q19'] = u.message.text if u.message.text else "📎 [Файл]"
+    
     d = c.user_data
-    report = f"📩 **НОВАЯ ЗАЯВКА**\nАвтор: @{u.effective_user.username}\n🕹 Проект: {d.get('q4')}\n" \
-             f"Версия: {d.get('q7')}\nЦена: {d.get('q5')}\n\n*Файлы пересылаются...*"
+    # ФОРМИРОВАНИЕ ПОЛНОГО ОТЧЕТА ИЗ 19 ПУНКТОВ
+    report = (
+        f"📩 **НОВАЯ ЗАЯВКА НА МОДЕРАЦИЮ (19/19)**\n"
+        f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"👤 **Отправитель:** @{u.effective_user.username} (ID: `{u.effective_user.id}`)\n\n"
+        f"1. **URL ID:** {d.get('q1')}\n"
+        f"2. **Описание:** {d.get('q2')}\n"
+        f"3. **Иконка (превью):** {d.get('q3')}\n"
+        f"4. **ЗАГОЛОВОК:** {d.get('q4')}\n"
+        f"5. **Категория:** {d.get('q5')}\n"
+        f"6. **Цена:** {d.get('q6')}\n"
+        f"7. **Версия:** {d.get('q7')}\n"
+        f"8. **Ссылка 1:** {d.get('q8')}\n"
+        f"9. **Ссылка 2:** {d.get('q9')}\n"
+        f"10. **Ссылка 3:** {d.get('q10')}\n"
+        f"11. **Ссылка 4:** {d.get('q11')}\n"
+        f"12. **Примечание:** {d.get('q12')}\n"
+        f"13. **Комментарии:** {d.get('q13')}\n"
+        f"14. **Фон:** {d.get('q14')}\n"
+        f"15. **Лог изменений:** {d.get('q15')}\n"
+        f"16. **Файл игры:** {d.get('q16')}\n"
+        f"17. **Иконка (файл):** {d.get('q17')}\n"
+        f"18. **Скриншоты:** {d.get('q18')}\n"
+        f"19. **Доп. файлы:** {d.get('q19')}\n"
+        f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"📦 *Все прикрепленные медиа-файлы будут пересланы ниже.*"
+    )
     
+    # Отправка текстового отчета
     await c.bot.send_message(ADMIN_CHAT_ID, report, parse_mode="Markdown")
-    for mid in d.get('media', []):
-        await c.bot.forward_message(ADMIN_CHAT_ID, u.message.chat_id, mid)
     
-    await u.message.reply_text("🚀 *Всё отправлено! Ожидайте ответа.*", reply_markup=main_menu(), parse_mode="Markdown")
+    # Пересылка файлов
+    for mid in d.get('media', []):
+        try:
+            await c.bot.forward_message(ADMIN_CHAT_ID, u.message.chat_id, mid)
+        except: pass
+    
+    await u.message.reply_text("🚀 *Ваша заявка полностью укомплектована и отправлена!*", reply_markup=main_menu(), parse_mode="Markdown")
     return ConversationHandler.END
 
 # Поддержка
 async def start_sup(u,c):
-    await u.message.reply_text("👨‍💻 Напишите ваш вопрос:", reply_markup=survey_menu(False))
+    await u.message.reply_text("👨‍💻 Напишите ваш вопрос модератору:", reply_markup=survey_menu(False))
     return SUPPORT_MODE
 
 async def send_sup(u,c):
     if u.message.text == "❌ ВЕРНУТЬСЯ В МЕНЮ": return await start(u,c)
-    await c.bot.send_message(ADMIN_CHAT_ID, f"🆘 **SUPPORT**\n@{u.effective_user.username}: {u.message.text}")
-    await u.message.reply_text("✅ Отправлено!", reply_markup=main_menu())
+    await c.bot.send_message(ADMIN_CHAT_ID, f"🆘 **SUPPORT**\nОт @{u.effective_user.username}: {u.message.text}")
+    await u.message.reply_text("✅ Сообщение отправлено!", reply_markup=main_menu())
     return ConversationHandler.END
 
 # --- RUN ---
@@ -175,4 +206,5 @@ def main():
 
     app.run_polling(drop_pending_updates=True)
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
