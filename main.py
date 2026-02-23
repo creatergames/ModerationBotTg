@@ -8,149 +8,143 @@ from telegram.ext import (
     ConversationHandler, ContextTypes, filters
 )
 
-# --- CONFIG ---
+# --- НАСТРОЙКИ ---
 TOKEN = "8346418130:AAF7u1diMBBTzDdfaoA9nBua4xJNfuSPY5A"
-ADMIN_CHAT_ID = "-1003844600340"
+ADMIN_CHAT_ID = "-1003844600340"  # Группа модерации
 
-# 19 Состояний
-(STEP1, STEP2, STEP3, STEP4, STEP5, STEP6, STEP7, STEP8, STEP9, STEP10,
- STEP11, STEP12, STEP13, STEP14, STEP15, STEP16, STEP17, STEP18, STEP19) = range(19)
+# Состояния: 19 шагов анкеты + Режим поддержки
+(S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14, S15, S16, S17, S18, S19, SUPPORT_MODE) = range(20)
 
 logging.basicConfig(level=logging.INFO)
 
-# --- SERVER FOR RENDER ---
+# --- SERVER FOR RENDER (Мгновенный старт) ---
 class HealthServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers()
-        self.wfile.write(b"ZGS Full Engine: Active")
+        self.wfile.write(b"ZGS Engine Running")
     def log_message(self, *args): pass
 
 def run_server():
     port = int(os.environ.get("PORT", 10000))
     HTTPServer(('0.0.0.0', port), HealthServer).serve_forever()
 
-# --- KEYBOARDS ---
-def main_kb():
+# --- КЛАВИАТУРЫ (Для скорости выбраны Reply-кнопки) ---
+def main_menu():
     return ReplyKeyboardMarkup([
-        [KeyboardButton("🌐 ОТКРЫТЬ ZGS MINI APP", web_app=WebAppInfo(url="https://zoro-game-store.vercel.app"))],
+        [KeyboardButton("🌐 ОТКРЫТЬ MINI APP", web_app=WebAppInfo(url="https://zoro-game-store.vercel.app"))],
         ["🚀 ОПУБЛИКОВАТЬ ПРОЕКТ"],
         ["📋 ПРАВИЛА", "👨‍💻 ПОДДЕРЖКА"]
     ], resize_keyboard=True)
 
-def survey_kb(can_skip=True):
+def survey_menu(can_skip=True):
     btns = []
     if can_skip: btns.append("⏩ ПРОПУСТИТЬ")
-    btns.append("❌ ОТМЕНИТЬ ЗАПОЛНЕНИЕ")
+    btns.append("❌ ВЕРНУТЬСЯ В МЕНЮ")
     return ReplyKeyboardMarkup([btns], resize_keyboard=True)
 
-# --- SURVEY LOGIC ---
+# --- ПРЯМАЯ СВЯЗЬ С МОДЕРАТОРАМИ ---
+async def start_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📝 *Режим связи с модератором*\nНапишите ваше сообщение ниже, и оно будет передано в группу поддержки.",
+        reply_markup=survey_menu(False), parse_mode="Markdown"
+    )
+    return SUPPORT_MODE
 
+async def send_to_moders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    text = update.message.text
+    if text == "❌ ВЕРНУТЬСЯ В МЕНЮ": return await start(update, context)
+    
+    msg = (f"📩 **СООБЩЕНИЕ В ПОДДЕРЖКУ**\n"
+           f"━━━━━━━━━━━━━━\n"
+           f"👤 От: {user.first_name} (@{user.username})\n"
+           f"🆔 ID: `{user.id}`\n"
+           f"💬 Сообщение: {text}")
+    
+    await context.bot.send_message(ADMIN_CHAT_ID, msg, parse_mode="Markdown")
+    await update.message.reply_text("✅ Сообщение отправлено! Модератор скоро ответит вам.", reply_markup=main_menu())
+    return ConversationHandler.END
+
+# --- ЛОГИКА АНКЕТЫ (19 ШАГОВ) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💎 *Zoro Game Store v6.0*\nВсе 19 вопросов анкеты готовы.", reply_markup=main_kb(), parse_mode="Markdown")
+    await update.message.reply_text("🎮 *Zoro Game Store*\nВыберите действие:", reply_markup=main_menu(), parse_mode="Markdown")
     return ConversationHandler.END
 
 async def start_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("1️⃣ *Название для ссылки:*", reply_markup=survey_kb(), parse_mode="Markdown")
-    return STEP1
+    await update.message.reply_text("1️⃣ *Название для ссылки:*", reply_markup=survey_menu(), parse_mode="Markdown")
+    return S1
 
-async def flow(update, context, key, next_step, text, can_skip=True):
-    val = update.message.text
-    if val == "❌ ОТМЕНИТЬ ЗАПОЛНЕНИЕ":
-        await update.message.reply_text("🛑 Заполнение отменено.", reply_markup=main_kb())
-        return ConversationHandler.END
-    context.user_data[key] = "—" if val == "⏩ ПРОПУСТИТЬ" else val
-    await update.message.reply_text(text, reply_markup=survey_kb(can_skip), parse_mode="Markdown")
-    return next_step
+async def engine(u, c, key, next_s, txt, skip=True):
+    if u.message.text == "❌ ВЕРНУТЬСЯ В МЕНЮ": return await start(u, c)
+    c.user_data[key] = "—" if u.message.text == "⏩ ПРОПУСТИТЬ" else u.message.text
+    await u.message.reply_text(txt, reply_markup=survey_menu(skip), parse_mode="Markdown")
+    return next_s
 
-# Регистрация всех шагов
-async def s1(u,c): return await flow(u,c, 'l_link', STEP2, "2️⃣ *Описание:*")
-async def s2(u,c): return await flow(u,c, 'l_desc', STEP3, "3️⃣ *Иконка (URL):*")
-async def s3(u,c): return await flow(u,c, 'l_icon', STEP4, "4️⃣ *Заголовок* (ОБЯЗАТЕЛЬНО)*:", False)
-async def s4(u,c): return await flow(u,c, 'l_title', STEP5, "5️⃣ *Категория:*")
-async def s5(u,c): return await flow(u,c, 'l_cat', STEP6, "6️⃣ *Цена:*")
-async def s6(u,c): return await flow(u,c, 'l_price', STEP7, "7️⃣ *Версия:*")
-async def s7(u,c): return await flow(u,c, 'l_ver', STEP8, "8️⃣ *Ссылка 1 (название = ссылка):*")
-async def s8(u,c): return await flow(u,c, 'l_u1', STEP9, "9️⃣ *Ссылка 2:*")
-async def s9(u,c): return await flow(u,c, 'l_u2', STEP10, "🔟 *Ссылка 3:*")
-async def s10(u,c): return await flow(u,c, 'l_u3', STEP11, "1️⃣1️⃣ *Ссылка 4:*")
-async def s11(u,c): return await flow(u,c, 'l_u4', STEP12, "1️⃣2️⃣ *Примечание к игре:*")
-async def s12(u,c): return await flow(u,c, 'l_note', STEP13, "1️⃣3️⃣ *Комментарии (ТГ ссылка или запрос):*")
-async def s13(u,c): return await flow(u,c, 'l_comm', STEP14, "1️⃣4️⃣ *Фоновое изображение (URL):*")
-async def s14(u,c): return await flow(u,c, 'l_bg', STEP15, "1️⃣5️⃣ *Описание последних изменений:*")
-async def s15(u,c): return await flow(u,c, 'l_chng', STEP16, "1️⃣6️⃣ *Файл игры:*")
-async def s16(u,c): return await flow(u,c, 'l_file', STEP17, "1️⃣7️⃣ *Иконка игры:*")
-async def s17(u,c): return await flow(u,c, 'l_g_ico', STEP18, "1️⃣8️⃣ *Скриншоты (до 8 шт):*")
-async def s18(u,c): return await flow(u,c, 'l_scrs', STEP19, "1️⃣9️⃣ *Дополнительные файлы и их названия (до 8 шт):*")
+# Цепочка мгновенных переходов
+async def st1(u,c): return await engine(u,c,'link', S2, "2️⃣ *Описание:*")
+async def st2(u,c): return await engine(u,c,'desc', S3, "3️⃣ *Иконка (URL):*")
+async def st3(u,c): return await engine(u,c,'icon', S4, "4️⃣ *Заголовок* (Обязательно!):", False)
+async def st4(u,c): return await engine(u,c,'title', S5, "5️⃣ *Категория:*")
+async def st5(u,c): return await engine(u,c,'cat', S6, "6️⃣ *Цена:*")
+async def st6(u,c): return await engine(u,c,'price', S7, "7️⃣ *Версия:*")
+async def st7(u,c): return await engine(u,c,'ver', S8, "8️⃣ *Ссылка 1 (название=ссылка):*")
+async def st8(u,c): return await engine(u,c,'u1', S9, "9️⃣ *Ссылка 2:*")
+async def st9(u,c): return await engine(u,c,'u2', S10, "🔟 *Ссылка 3:*")
+async def st10(u,c): return await engine(u,c,'u3', S11, "1️⃣1️⃣ *Ссылка 4:*")
+async def st11(u,c): return await engine(u,c,'u4', S12, "1️⃣2️⃣ *Примечание к игре:*")
+async def st12(u,c): return await engine(u,c,'note', S13, "1️⃣3️⃣ *Комментарии (ссылка):*")
+async def st13(u,c): return await engine(u,c,'comm', S14, "1️⃣4️⃣ *Фоновое изображение (URL):*")
+async def st14(u,c): return await engine(u,c,'bg', S15, "1️⃣5️⃣ *Описание изменений:*")
+async def st15(u,c): return await engine(u,c,'chng', S16, "1️⃣6️⃣ *Файл игры:*")
+async def st16(u,c): return await engine(u,c,'file', S17, "1️⃣7️⃣ *Иконка игры:*")
+async def st17(u,c): return await engine(u,c,'g_ico', S18, "1️⃣8️⃣ *Скриншоты (до 8 шт):*")
+async def st18(u,c): return await engine(u,c,'scrs', S19, "1️⃣9️⃣ *Доп. файлы и названия:*")
 
-async def finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['l_addf'] = update.message.text
+async def final(update, context):
+    context.user_data['addf'] = update.message.text
     d = context.user_data
+    report = (f"🎁 **ЗАЯВКА (19 ШАГОВ)**\n━━━━━━━━━━━━━━\n"
+              f"🕹 **Игра:** {d.get('title')}\n📝 **Описание:** {d.get('desc')}\n"
+              f"💰 **Цена:** {d.get('price')} | **Версия:** {d.get('ver')}\n"
+              f"📂 **Категория:** {d.get('cat')}\n🌐 **ID:** {d.get('link')}\n"
+              f"💬 **Связь:** {d.get('comm')}\n🖼 **Фон:** {d.get('bg')}\n"
+              f"📦 **Файл:** {d.get('file')}\n━━━━━━━━━━━━━━\n"
+              f"👤 От: @{update.effective_user.username}")
     
-    # Формируем полный отчет для модерации
-    full_report = (
-        f"🎁 **НОВАЯ ЗАЯВКА ZGS (19/19)**\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🕹 **Игра:** {d.get('l_title')}\n"
-        f"🔗 **ID Ссылки:** {d.get('l_link')}\n"
-        f"📝 **Описание:** {d.get('l_desc')}\n"
-        f"📂 **Категория:** {d.get('l_cat')}\n"
-        f"💰 **Цена:** {d.get('l_price')} ₽\n"
-        f"📊 **Версия:** {d.get('l_ver')}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🌐 **Ссылки:**\n1: {d.get('l_u1')}\n2: {d.get('l_u2')}\n3: {d.get('l_u3')}\n4: {d.get('l_u4')}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💬 **Комменты:** {d.get('l_comm')}\n"
-        f"🖼 **Фон:** {d.get('l_bg')}\n"
-        f"🆙 **Патч-ноут:** {d.get('l_chng')}\n"
-        f"📦 **Файл:** {d.get('l_file')}\n"
-        f"🖼 **Иконка:** {d.get('l_g_ico')}\n"
-        f"📸 **Скрины:** {d.get('l_scrs')}\n"
-        f"📁 **Доп. файлы:** {d.get('l_addf')}\n"
-        f"⚠️ **Примечание:** {d.get('l_note')}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 **Автор:** @{update.effective_user.username}"
-    )
-    
-    await context.bot.send_message(ADMIN_CHAT_ID, full_report, parse_mode="Markdown")
-    await update.message.reply_text("🚀 *Заявка укомплектована и отправлена модераторам!*", reply_markup=main_kb(), parse_mode="Markdown")
+    await context.bot.send_message(ADMIN_CHAT_ID, report, parse_mode="Markdown")
+    await update.message.reply_text("🚀 *Заявка улетела!*", reply_markup=main_menu(), parse_mode="Markdown")
     return ConversationHandler.END
 
-# --- MAIN ---
+# --- ЗАПУСК ---
 def main():
     threading.Thread(target=run_server, daemon=True).start()
     app = Application.builder().token(TOKEN).build()
 
     conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^🚀 ОПУБЛИКОВАТЬ ПРОЕКТ$"), start_survey)],
+        entry_points=[
+            MessageHandler(filters.Regex("^🚀 ОПУБЛИКОВАТЬ ПРОЕКТ$"), start_survey),
+            MessageHandler(filters.Regex("^👨‍💻 ПОДДЕРЖКА$"), start_support)
+        ],
         states={
-            STEP1: [MessageHandler(filters.TEXT & ~filters.COMMAND, s1)],
-            STEP2: [MessageHandler(filters.TEXT & ~filters.COMMAND, s2)],
-            STEP3: [MessageHandler(filters.TEXT & ~filters.COMMAND, s3)],
-            STEP4: [MessageHandler(filters.TEXT & ~filters.COMMAND, s4)],
-            STEP5: [MessageHandler(filters.TEXT & ~filters.COMMAND, s5)],
-            STEP6: [MessageHandler(filters.TEXT & ~filters.COMMAND, s6)],
-            STEP7: [MessageHandler(filters.TEXT & ~filters.COMMAND, s7)],
-            STEP8: [MessageHandler(filters.TEXT & ~filters.COMMAND, s8)],
-            STEP9: [MessageHandler(filters.TEXT & ~filters.COMMAND, s9)],
-            STEP10: [MessageHandler(filters.TEXT & ~filters.COMMAND, s10)],
-            STEP11: [MessageHandler(filters.TEXT & ~filters.COMMAND, s11)],
-            STEP12: [MessageHandler(filters.TEXT & ~filters.COMMAND, s12)],
-            STEP13: [MessageHandler(filters.TEXT & ~filters.COMMAND, s13)],
-            STEP14: [MessageHandler(filters.TEXT & ~filters.COMMAND, s14)],
-            STEP15: [MessageHandler(filters.TEXT & ~filters.COMMAND, s15)],
-            STEP16: [MessageHandler(filters.TEXT & ~filters.COMMAND, s16)],
-            STEP17: [MessageHandler(filters.TEXT & ~filters.COMMAND, s17)],
-            STEP18: [MessageHandler(filters.TEXT & ~filters.COMMAND, s18)],
-            STEP19: [MessageHandler(filters.TEXT & ~filters.COMMAND, finish)],
+            S1: [MessageHandler(filters.TEXT & ~filters.COMMAND, st1)], S2: [MessageHandler(filters.TEXT & ~filters.COMMAND, st2)],
+            S3: [MessageHandler(filters.TEXT & ~filters.COMMAND, st3)], S4: [MessageHandler(filters.TEXT & ~filters.COMMAND, st4)],
+            S5: [MessageHandler(filters.TEXT & ~filters.COMMAND, st5)], S6: [MessageHandler(filters.TEXT & ~filters.COMMAND, st6)],
+            S7: [MessageHandler(filters.TEXT & ~filters.COMMAND, st7)], S8: [MessageHandler(filters.TEXT & ~filters.COMMAND, st8)],
+            S9: [MessageHandler(filters.TEXT & ~filters.COMMAND, st9)], S10: [MessageHandler(filters.TEXT & ~filters.COMMAND, st10)],
+            S11: [MessageHandler(filters.TEXT & ~filters.COMMAND, st11)], S12: [MessageHandler(filters.TEXT & ~filters.COMMAND, st12)],
+            S13: [MessageHandler(filters.TEXT & ~filters.COMMAND, st13)], S14: [MessageHandler(filters.TEXT & ~filters.COMMAND, st14)],
+            S15: [MessageHandler(filters.TEXT & ~filters.COMMAND, st15)], S16: [MessageHandler(filters.TEXT & ~filters.COMMAND, st16)],
+            S17: [MessageHandler(filters.TEXT & ~filters.COMMAND, st17)], S18: [MessageHandler(filters.TEXT & ~filters.COMMAND, st18)],
+            S19: [MessageHandler(filters.TEXT & ~filters.COMMAND, final)],
+            SUPPORT_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_to_moders)]
         },
-        fallbacks=[MessageHandler(filters.Regex("^❌ ОТМЕНИТЬ ЗАПОЛНЕНИЕ$"), start)],
+        fallbacks=[MessageHandler(filters.Regex("^❌ ВЕРНУТЬСЯ В МЕНЮ$"), start)],
     )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv)
 
-    print("🚀 ZGS ENGINE V6 STARTED")
+    print("🚀 ENGINE SUPERSONIC START")
     app.run_polling(drop_pending_updates=True)
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
