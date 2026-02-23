@@ -3,10 +3,10 @@ import os
 import threading
 import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, 
-    ConversationHandler, ContextTypes, filters
+    ConversationHandler, ContextTypes, filters, CallbackQueryHandler
 )
 
 # --- НАСТРОЙКИ ---
@@ -30,7 +30,7 @@ def run_server():
     port = int(os.environ.get("PORT", 10000))
     HTTPServer(('0.0.0.0', port), HealthServer).serve_forever()
 
-# --- ПРАВИЛА (ОБНОВЛЕННЫЕ) ---
+# --- ПРАВИЛА ---
 RULES_FULL = """
 📋 *ПРАВИЛА РАЗМЕЩЕНИЯ ZGS*
 
@@ -71,29 +71,57 @@ def survey_menu(can_skip=True):
     btns.append("❌ ВЕРНУТЬСЯ В МЕНЮ")
     return ReplyKeyboardMarkup([btns], resize_keyboard=True)
 
+# --- АДМИН ПАНЕЛЬ ---
+async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data.split("|")
+    action = data[0]
+    user_id = data[1]
+    project_name = data[2]
+
+    if action == "approve":
+        await context.bot.send_message(user_id, f"✅ Ваша заявка по проекту *{project_name}* одобрена!", parse_mode="Markdown")
+        await query.edit_message_text(f"✅ Проект {project_name} ОДОБРЕН админом {update.effective_user.name}")
+    elif action == "reject":
+        await query.edit_message_text(f"❌ Проект {project_name} ОТКЛОНЕН. Введите причину отказа в ответ на этот пост.")
+        context.user_data['reject_user_id'] = user_id
+
+# Ответ админа на поддержку (просто ответьте на сообщение юзера в админ-чате)
+async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_chat.id) == ADMIN_CHAT_ID and update.message.reply_to_message:
+        reply_text = update.message.reply_to_message.text
+        if "ID:" in reply_text:
+            try:
+                target_user_id = reply_text.split("ID:")[1].split("\n")[0].strip()
+                await context.bot.send_message(target_user_id, f"👨‍💻 *Ответ поддержки:*\n\n{update.message.text}", parse_mode="Markdown")
+                await update.message.reply_text("✅ Ответ отправлен пользователю.")
+            except: pass
+
 # --- ЛОГИКА ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("💎 *Zoro Game Store v7.0*\nВсе системы активны.", reply_markup=main_menu(), parse_mode="Markdown")
     return ConversationHandler.END
 
+async def show_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(RULES_FULL, reply_markup=main_menu(), parse_mode="Markdown")
+
 async def mini_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     score = context.user_data.get('click_score', 0)
     context.user_data['click_score'] = score + 1
-    await update.message.reply_text(f"🎯 **ZORO CLICKER**\n\nВы кликнули: {score + 1} раз(а)!\nЖмите еще раз на кнопку в меню, чтобы играть.", parse_mode="Markdown")
+    await update.message.reply_text(f"🎯 **ZORO CLICKER**\n\nВы кликнули: {score + 1} раз(а)!", parse_mode="Markdown")
 
 async def engine(u, c, key, next_s, txt, skip=True):
     if u.message.text == "❌ ВЕРНУТЬСЯ В МЕНЮ": return await start(u, c)
     if 'media' not in c.user_data: c.user_data['media'] = []
-
     if u.message.text == "⏩ ПРОПУСТИТЬ":
         c.user_data[key] = "—"
     else:
-        if u.message.text:
-            c.user_data[key] = u.message.text
+        if u.message.text: c.user_data[key] = u.message.text
         else:
             c.user_data['media'].append(u.message.message_id)
             c.user_data[key] = "📎 [Файл прикреплен]"
-
     await u.message.reply_text(txt, reply_markup=survey_menu(skip), parse_mode="Markdown")
     return next_s
 
@@ -126,10 +154,18 @@ async def final(u,c):
     if not u.message.text: c.user_data['media'].append(u.message.message_id)
     c.user_data['q19'] = u.message.text if u.message.text else "📎 [Файл]"
     d = c.user_data
-    report = f"📩 **ЗАЯВКА (19/19)**\nАвтор: @{u.effective_user.username}\nПроект: {d.get('q4')}\n\n"
+    uid = u.effective_user.id
+    name = d.get('q4', 'Project')
+    
+    report = f"📩 **ЗАЯВКА (19/19)**\nАвтор: @{u.effective_user.username}\nID: `{uid}`\nПроект: {name}\n\n"
     for i in range(1, 20): report += f"{i}. {d.get(f'q{i}')}\n"
     
-    await c.bot.send_message(ADMIN_CHAT_ID, report)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Одобрить", callback_data=f"approve|{uid}|{name}"),
+         InlineKeyboardButton("❌ Отклонить", callback_data=f"reject|{uid}|{name}")]
+    ])
+    
+    await c.bot.send_message(ADMIN_CHAT_ID, report, reply_markup=kb)
     for mid in d.get('media', []):
         try: await c.bot.forward_message(ADMIN_CHAT_ID, u.message.chat_id, mid)
         except: pass
@@ -143,15 +179,18 @@ async def start_sup(u,c):
 
 async def send_sup(u,c):
     if u.message.text == "❌ ВЕРНУТЬСЯ В МЕНЮ": return await start(u,c)
-    await c.bot.send_message(ADMIN_CHAT_ID, f"🆘 **SUPPORT**\n@{u.effective_user.username}: {u.message.text}")
-    await u.message.reply_text("✅ Отправлено!", reply_markup=main_menu())
+    msg = f"🆘 **SUPPORT**\nID: `{u.effective_user.id}`\nАвтор: @{u.effective_user.username}\n\n{u.message.text}"
+    await c.bot.send_message(ADMIN_CHAT_ID, msg)
+    await u.message.reply_text("✅ Отправлено! Ожидайте ответа.", reply_markup=main_menu())
     return ConversationHandler.END
 
 def main():
     threading.Thread(target=run_server, daemon=True).start()
     app = Application.builder().token(TOKEN).build()
+    
     conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^🚀 ОПУБЛИКОВАТЬ ПРОЕКТ$"), st_start), MessageHandler(filters.Regex("^👨‍💻 ПОДДЕРЖКА$"), start_sup)],
+        entry_points=[MessageHandler(filters.Regex("^🚀 ОПУБЛИКОВАТЬ ПРОЕКТ$"), st_start), 
+                      MessageHandler(filters.Regex("^👨‍💻 ПОДДЕРЖКА$"), start_sup)],
         states={
             S1: [MessageHandler(filters.ALL & ~filters.COMMAND, s1)], S2: [MessageHandler(filters.ALL & ~filters.COMMAND, s2)],
             S3: [MessageHandler(filters.ALL & ~filters.COMMAND, s3)], S4: [MessageHandler(filters.ALL & ~filters.COMMAND, s4)],
@@ -167,9 +206,12 @@ def main():
         },
         fallbacks=[MessageHandler(filters.Regex("^❌ ВЕРНУТЬСЯ В МЕНЮ$"), start)],
     )
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Regex("^📋 ПРАВИЛА$"), lambda u,c: u.message.reply_text(RULES_FULL, parse_mode="Markdown")))
+    app.add_handler(MessageHandler(filters.Regex("^📋 ПРАВИЛА$"), show_rules))
     app.add_handler(MessageHandler(filters.Regex("^🎮 МИНИ-ИГРА$"), mini_game))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reply)) # Ответ админа
+    app.add_handler(CallbackQueryHandler(admin_decision)) # Кнопки Одобрить/Отказ
     app.add_handler(conv)
     app.run_polling(drop_pending_updates=True)
 
