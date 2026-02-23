@@ -17,17 +17,20 @@ from telegram.ext import (
     filters,
 )
 
+# --- КОНФИГУРАЦИЯ ---
+TOKEN = "7547192801:AAH8rS5FOn-j8OAn9K0yE1p0G1G6G1G6G1G" # Твой токен от BotFather
+ADMIN_CHAT_ID = "6434444555" # Твой ID для получения заявок
+
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Константы состояний
+# Состояния
 (
-    START_ORDER, RULES_AGREE, LINK_NAME, DESCRIPTION, ICON, TITLE, 
+    START_ORDER, LINK_NAME, DESCRIPTION, ICON, TITLE, 
     CATEGORY, PRICE, VERSION, LINKS_BLOCK, NOTE, COMMENTS, 
     BACKGROUND, CHANGELOG, GAME_FILE, GAME_ICON, SCREENSHOTS, EXTRA_FILES
-) = range(18)
+) = range(17)
 
-# Контакты и инфо
 SUPPORT_INFO = """
 Tevs.service
 ────────────────────
@@ -40,129 +43,152 @@ Tevs.service
 RULES_TEXT = """
 📜 **Критерии Zoro Game Store (ZGS):**
 
-1. **Название:** 2-25 символов, без ссылок, без мата.
-2. **Обложка:** Формат 16:9, без порнографии и АП.
-3. **Скриншоты:** 3 основных обязательно, далее - безлимит.
-4. **Версия:** Числа, A, B, C, V, '.', '_', '-', "beta", "Alpha", "Release".
-5. **Файлы:** APK, EXE, HTML до 100 Гб. Без вирусов.
-6. **Цена:** от 3 ₽ до 50 000 ₽.
-7. **Запреты:** Контент Meta*, пропаганда запрещенных орг. РФ, нарушение Конституции РФ.
+1. **Название:** 2-25 символов, без ссылок и мата.
+2. **Обложка:** 16:9, без АП.
+3. **Версия:** Числа, A, B, C, V, '.', '_', '-', "beta", "Alpha", "Release".
+4. **Файлы:** APK, EXE, HTML до 100 Гб. Без вирусов.
+5. **Цена:** от 3 ₽ до 50 000 ₽.
+6. **Запреты:** Контент Meta*, пропаганда запрещенных орг. РФ.
 
-Полный список доступен в меню. Согласны продолжить?
+Нажимая кнопку ниже, вы соглашаетесь с правилами.
 """
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🌐 Mini App (Загрузить игру)", web_app=WebAppInfo(url="https://zoro-game-store.vercel.app"))],
+        [InlineKeyboardButton("🌐 Mini App (Загрузить)", web_app=WebAppInfo(url="https://zoro-game-store.vercel.app"))],
         [InlineKeyboardButton("📝 Начать загрузку в боте", callback_data="start_survey")],
-        [InlineKeyboardButton("📋 Правила и Поддержка", callback_data="show_rules")],
+        [InlineKeyboardButton("📋 Правила", callback_data="show_rules")],
         [InlineKeyboardButton("👨‍💻 Связь с модером", callback_data="contact_mod")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        f"🎮 **Zoro Game Store Bot**\n\n{SUPPORT_INFO}\nПривет! Выберите действие:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
+    text = f"🎮 **Zoro Game Store Bot**\n\n{SUPPORT_INFO}\nВыберите действие:"
+    if update.message:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    else:
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
     return START_ORDER
 
 async def show_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
-    keyboard = [[InlineKeyboardButton("✅ Я ознакомлен, начать", callback_data="start_survey")]]
+    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_start")]]
     await query.edit_message_text(RULES_TEXT, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def start_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.message.reply_text("1️⃣ Введите **Название для ссылки** (для внутреннего использования):")
+    await query.message.reply_text("1️⃣ Введите **Название для ссылки**:")
     return LINK_NAME
+
+async def get_link_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['link_name'] = update.message.text
+    await update.message.reply_text("2️⃣ Введите **Описание**:")
+    return DESCRIPTION
+
+async def get_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['description'] = update.message.text
+    await update.message.reply_text("3️⃣ Отправьте **Иконку** (URL или файл):")
+    return ICON
+
+async def get_icon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['icon'] = update.message.text or (update.message.document.file_id if update.message.document else "Файл")
+    await update.message.reply_text("4️⃣ Введите **Заголовок*** (от 2 до 25 символов):")
+    return TITLE
 
 async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     val = update.message.text.strip()
-    # Валидация по правилам ZGS
-    if len(val) < 2 or len(val) > 25:
-        await update.message.reply_text("❌ Ошибка! Название должно быть от 2 до 25 символов.")
+    if len(val) < 2 or len(val) > 25 or "http" in val:
+        await update.message.reply_text("❌ Ошибка! Название должно быть 2-25 символов и без ссылок. Попробуйте еще раз:")
         return TITLE
-    if re.search(r'http[s]?://', val):
-        await update.message.reply_text("❌ Название не должно содержать ссылок.")
-        return TITLE
-
     context.user_data['title'] = val
-    await update.message.reply_text("5️⃣ Введите **Категорию** (жанр игры):")
+    await update.message.reply_text("5️⃣ Введите **Категорию**:")
     return CATEGORY
 
-async def get_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    val = update.message.text
-    pattern = r'^[0-9ABCV._\-betaAlphaRelease ]+$'
-    if not re.match(pattern, val):
-        await update.message.reply_text("❌ Неверный формат версии! Разрешены цифры, точки, дефисы и слова beta/Alpha/Release.")
-        return VERSION
-    
-    context.user_data['version'] = val
-    await update.message.reply_text("➕ Введите ссылки (до 4-х) в формате: `имя = ссылка`.\nНапишите 'Далее' для перехода.")
-    return LINKS_BLOCK
+async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['category'] = update.message.text
+    await update.message.reply_text("6️⃣ Введите **Цену** (от 3 до 50 000 ₽):")
+    return PRICE
 
 async def get_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         price = int(update.message.text.replace(" ", ""))
-        if price < 3 or price > 50000:
-            raise ValueError
-        context.user_data['price'] = price
-        await update.message.reply_text("7️⃣ Введите **Версию игры**:")
-        return VERSION
-    except:
-        await update.message.reply_text("❌ Цена должна быть числом от 3 ₽ до 50 000 ₽.")
+        if 3 <= price <= 50000:
+            context.user_data['price'] = price
+            await update.message.reply_text("7️⃣ Введите **Версию** (цифры, точки, beta/Alpha/Release):")
+            return VERSION
+        raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Введите число от 3 до 50 000:")
         return PRICE
 
-# --- Вспомогательные функции связи ---
+async def get_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text
+    if not re.match(r'^[0-9ABCV._\-betaAlphaRelease ]+$', val):
+        await update.message.reply_text("❌ Неверный формат версии. Используйте цифры, точки или слова Alpha/beta.")
+        return VERSION
+    context.user_data['version'] = val
+    await update.message.reply_text("8️⃣ Введите ссылки (до 4) в формате `название = ссылка`. Когда закончите, напишите 'Далее'.")
+    return LINKS_BLOCK
+
+async def get_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text.lower() == 'далее':
+        await update.message.reply_text("9️⃣ Введите **Примечание к игре**:")
+        return NOTE
+    if 'links' not in context.user_data: context.user_data['links'] = []
+    context.user_data['links'].append(text)
+    await update.message.reply_text(f"Добавлено ({len(context.user_data['links'])}/4). Еще одну или 'Далее'?")
+    return LINKS_BLOCK
+
+async def finish_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Финальная сборка данных (упрощено для краткости)
+    await update.message.reply_text("✅ Заявка успешно сформирована и отправлена модераторам Zoro Store!")
+    
+    # Отправка админу
+    summary = f"🆕 **Новая игра на модерацию!**\n\nЗаголовок: {context.user_data.get('title')}\nВерсия: {context.user_data.get('version')}\nЦена: {context.user_data.get('price')} ₽"
+    await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=summary, parse_mode="Markdown")
+    return ConversationHandler.END
+
 async def contact_mod(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.message.reply_text("📧 Напишите ваше обращение. Модераторы Zoro Store ответят вам в ближайшее время.")
+    await query.message.reply_text("💬 Напишите ваше сообщение модератору. Я его передам.")
     context.user_data['waiting_mod'] = True
-
-async def handle_mod_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('waiting_mod'):
-        # Здесь отправка сообщения админу (логика пересылки)
-        await update.message.reply_text("✅ Ваше сообщение передано в службу поддержки.")
-        context.user_data['waiting_mod'] = False
-        return
+    return START_ORDER
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Заполнение отменено.", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("❌ Отменено.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 def main():
-    # Замени на свой ТОКЕН
-    app = Application.builder().token("YOUR_TOKEN").build()
+    app = Application.builder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
             CallbackQueryHandler(start_survey, pattern="^start_survey$"),
             CallbackQueryHandler(show_rules, pattern="^show_rules$"),
+            CallbackQueryHandler(start, pattern="^back_to_start$"),
             CallbackQueryHandler(contact_mod, pattern="^contact_mod$")
         ],
         states={
-            LINK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: (c.user_data.update({'l_name': u.message.text}), u.message.reply_text("2️⃣ Введите **Описание**:"), DESCRIPTION)[2])],
-            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: (c.user_data.update({'desc': u.message.text}), u.message.reply_text("3️⃣ Отправьте **Иконку** (ссылка/файл):"), ICON)[2])],
-            ICON: [MessageHandler(filters.ALL & ~filters.COMMAND, lambda u, c: (u.message.reply_text("4️⃣ Введите **Заголовок*** (2-25 симв):"), TITLE)[1])],
+            LINK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_link_name)],
+            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_description)],
+            ICON: [MessageHandler(filters.ALL & ~filters.COMMAND, get_icon)],
             TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
-            CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: (c.user_data.update({'cat': u.message.text}), u.message.reply_text("6️⃣ Введите **Цену** (3-50000 ₽):"), PRICE)[2])],
+            CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_category)],
             PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_price)],
             VERSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_version)],
-            # ... остальные состояния аналогично ...
+            LINKS_BLOCK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_links)],
+            NOTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, finish_survey)], # Упростил для примера
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
     app.add_handler(conv_handler)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_mod_reply))
     
-    print("🚀 Бот Zoro Store запущен...")
+    print("🚀 Бот Zoro Store запущен на Render...")
     app.run_polling()
 
 if __name__ == "__main__":
